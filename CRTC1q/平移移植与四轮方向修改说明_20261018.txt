@@ -1,0 +1,103 @@
+CRTC1q：从 CRTC2z 移植平移输出分配
+日期：2026-10-18；本次修改由 Codex 完成。
+
+一、本次完成了什么
+读取 CRTC2z 中 ps2_ctrl.c 的实际公式、数组下标及 apply_wheel 调用顺序，
+把它已经在你的车上能平移的轮速分配移植到 CRTC1q。
+CRTC2z 未修改；实际修改对象是当前目录 CRTC1q。
+保留 CRTC1q 原有的低速分段曲线、按时间计算的轮速斜坡、回中立即刹车、
+换向经过零输出、失联停车、PWM 制动模式和机械臂/云台控制。
+
+源项目有一个需要注意的地方：
+CRTC2z 的数组注释不完全对应实际输出：公式把 wheel[3] 写成右前、wheel[1] 写成右后，
+但实际调用是 wheel[1] 传给 CAR_WHEEL_RF，wheel[3] 传给 CAR_WHEEL_RR。
+本次按实际执行结果移植，并用轮子枚举直接索引，避免继续依赖这组不一致的注释。
+这张输出表用于复现你现有实车的 CRTC2z 行为，不是所有麦轮安装方式通用的标准表。
+
+二、平移为什么有区别
+按 LF=左前、LR=左后、RF=右前、RR=右后排列：
+                      LF   LR   RF   RR
+CRTC1q 原版，纯右移：   -    +    +    -
+CRTC2z 实际，纯右移：   +    -    +    -
+移植后 CRTC1q 纯右移：  +    -    +    -
+纯左移为上述四个符号全部取反。
+只改变了左前、左后对 strafe 的响应符号；前进和转向分配保持原样。
+注意：正负表示控制层/驱动接口的方向指令，不是从照片直接判断的车轮前后滚动方向。
+硬件的接线、轮子位置与滚子安装仍会影响最后的实车运动，须上车确认。
+
+三、代码是怎样执行的
+Core/Src/ps2_ctrl.c 的 state_motor() 是摇杆到四轮的主流程：
+1. PS2_AxisMap 把左杆 Y、左杆 X、右杆 X 转成 -1000~1000，带原来的死区。
+2. shape_axis 保留原手感：死区外前 70% 行程对应约 0~20% 输出，后段升到满速。
+3. strafe 乘 PS2_CTRL_STRAFE_SIGN，只负责整车左右平移方向。
+4. 四轮目标按以下公式生成：
+   wheel[CAR_WHEEL_LF] = forward + strafe + turn;
+   wheel[CAR_WHEEL_RF] = forward + strafe - turn;
+   wheel[CAR_WHEEL_LR] = forward - strafe + turn;
+   wheel[CAR_WHEEL_RR] = forward - strafe - turn;
+5. 超过量程时四轮统一缩放，保留各轮比例。
+6. apply_wheel() 继续使用原来的轮速斜坡，再调用 Car_MotorPermille()。
+7. drv8833.c 的 DRV8833_SetMotor() 应用单轮方向开关，最终写入定时器 PWM。
+原有右杆转向与左杆平移可以叠加的行为保留，没有改成右杆独占控制。
+
+四、怎样单独修改一个轮子的方向
+打开 Core/Inc/drv8833.h，找到下面四行：
+  #define DRV8833_DIR_LF (+1)  // 左前
+  #define DRV8833_DIR_LR (+1)  // 左后
+  #define DRV8833_DIR_RF (+1)  // 右前
+  #define DRV8833_DIR_RR (+1)  // 右后
+默认 +1 保留原方向。哪一个轮子正反接反，就只把对应值改成 -1。
+例如只反向左后轮：#define DRV8833_DIR_LR (-1)
+然后重新编译、重新烧录即可；不需要交换 IN1/IN2 或改其他三轮。
+
+当前驱动中的实际通道表为：
+LF 左前：编号 0，PA6 TIM3_CH1 / PA7 TIM3_CH2。
+LR 左后：编号 1，PB0 TIM3_CH3 / PB1 TIM3_CH4。
+RF 右前：编号 2，PB6 TIM4_CH1 / PB7 TIM4_CH2。
+RR 右后：编号 3，PB9 TIM4_CH4 / PB8 TIM4_CH3。
+右后原本已经对调过 PB9/PB8；DIR_RR=+1 是保留该已有修正，不需要再额外取反。
+这些名称来自当前两个工程的驱动映射；若实际插座对应轮子不同，应先核实物理对应。
+单轮 DIR 修改会影响该轮的前进、后退、平移、转向以及 Car_Motor 的直接命令。
+DRV8833_GetMotor()/串口轮速读数为应用 DIR 后的输出指令，不是实测转速。
+
+五、整车左右平移方向反了怎么办
+如果四轮前后运动已正常，仅左杆推右时车向左平移：
+打开 Core/Inc/ps2_ctrl.h，把 PS2_CTRL_STRAFE_SIGN 从 (+1) 改为 (-1)。
+它只翻转平移轴，不翻转前后或转向。
+如果某一只电机的方向本来就是反的，用单轮 DIR；不要混用两种开关修同一个问题。
+如果电机方向正确但几何组合仍不能平移，不应靠任意翻转某个 DIR 掩盖；
+应核对轮子物理位置/滚子装配与这份从 CRTC2z 复制的输出表是否对应。
+
+六、怎样确认与微调
+先架空四轮，在低速下试纯前进、纯右移、纯左移和纯转向；松杆应立即刹车。
+再把车放到地上确认真实平移效果。
+方向改动只改上面对应开关；保留 ps2_ctrl.h 中原来的低速曲线和斜坡参数：
+PS2_CTRL_LOW_INPUT_RANGE=700、PS2_CTRL_LOW_OUTPUT_RANGE=200、
+PS2_CTRL_PWM_RISE_PER_SEC=2500、PS2_CTRL_RAMP_MAX_DT_MS=50。
+从零到满输出的斜坡约 0.4 秒，未增加固定起转 PWM。
+改完任意参数都要重新编译并烧录，直接修改源码不会更新板内程序。
+
+七、验证和文件位置
+Keil 工程：MDK-ARM/CRTC1.uvprojx，目标 CRTC1。
+本次使用实际安装的 ARMCC V5.06 update 5，完整重新编译：0 Error(s)，0 Warning(s)。
+Program Size: Code=20716 RO-data=1336 RW-data=76 ZI-data=2220。
+新 HEX：MDK-ARM/CRTC1/CRTC1.hex。
+编译日志：MDK-ARM/build_log.txt。
+本次未烧录，也未替你验证实物平移成功。
+
+tests/run_strafe_tests.py 使用实际控制/驱动 C 源码、模拟硬件做回归测试：
+- 纯前后、纯左右、纯转向及斜向缩放。
+- 直接执行 CRTC2z 控制源码，核对稳定后的轮速组合。
+- 前后和转向 12000 次更新与修改前 CRTC1q 完全一致。
+- 原轮速斜坡、松杆刹车、失联停车。
+- 分别翻转 LF/LR/RF/RR 的 DIR，检查独立方向和 PWM 输出。
+这些模拟测试不代替硬件运动验证。
+
+八、本次代码改动和备份
+Core/Src/ps2_ctrl.c：移植平移符号并补充与实际执行一致的说明。
+Core/Inc/ps2_ctrl.h：添加 PS2_CTRL_STRAFE_SIGN 及取值检查。
+Core/Inc/drv8833.h：添加四轮独立 DIR 开关及取值检查。
+Core/Src/drv8833.c：在限幅后、生成 PWM 前应用对应 DIR。
+tests/：新增本次回归测试，不参与 Keil 编译。
+未改 main.c、Car 抽象层、舵机、PS2 协议、CubeMX 配置或定时器初始化。
+修改前完整备份位于同级：CRTC1q_平移修改前_20261018_223133.zip。

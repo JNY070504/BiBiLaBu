@@ -1,0 +1,15 @@
+{
+  "backup": "C:\\Users\\27127\\Desktop\\crtc\\CRTC1q_平移修改前_20261018_223133.zip",
+  "source_project": "CRTC2z (read-only)",
+  "changed_code_files": [
+    "Core/Inc/drv8833.h",
+    "Core/Inc/ps2_ctrl.h",
+    "Core/Src/drv8833.c",
+    "Core/Src/ps2_ctrl.c"
+  ],
+  "keil_build": "0 errors, 0 warnings; ARMCC 5.06u5",
+  "hex_file": "MDK-ARM/CRTC1/CRTC1.hex",
+  "hex_sha256": "42d7326b0e23c4ad4af3bfa5d3a79e579ae9b2e1fefa04c619ec49515095b14c",
+  "host_tests": "PASS; reference strafe, individual direction reversals, 12000 pre-edit forward/turn samples identical",
+  "hardware_tested": false
+}
